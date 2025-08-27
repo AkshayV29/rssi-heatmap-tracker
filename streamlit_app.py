@@ -1,11 +1,10 @@
-# streamlit_app.py
+# streamlit_app_simple.py
 import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime
 import json
+import csv
+import io
+from datetime import datetime
+import math
 
 st.set_page_config(
     page_title="📶 Simple RSSI Heatmap Tracker",
@@ -16,20 +15,16 @@ st.set_page_config(
 # Initialize session state
 if 'data_points' not in st.session_state:
     st.session_state.data_points = []
-if 'is_tracking' not in st.session_state:
-    st.session_state.is_tracking = False
-if 'start_position' not in st.session_state:
-    st.session_state.start_position = None
 
 def add_data_point(x, y, rssi):
     """Add a new data point to the session"""
     quality = get_rssi_quality(rssi)
     point = {
-        'x': x,
-        'y': y, 
-        'rssi': rssi,
+        'x': float(x),
+        'y': float(y), 
+        'rssi': int(rssi),
         'quality': quality,
-        'timestamp': datetime.now()
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     }
     st.session_state.data_points.append(point)
 
@@ -49,98 +44,75 @@ def get_rssi_quality(rssi):
 def get_rssi_color(rssi):
     """Get color for RSSI value"""
     if rssi >= -60:
-        return 'green'
+        return '#4CAF50'  # Green
     elif rssi >= -70:
-        return 'lightgreen'
+        return '#8BC34A'  # Light Green
     elif rssi >= -80:
-        return 'yellow'
+        return '#FFC107'  # Yellow
     elif rssi >= -90:
-        return 'orange'
+        return '#FF9800'  # Orange
     else:
-        return 'red'
-
-def create_heatmap():
-    """Create interactive heatmap using Plotly"""
-    if not st.session_state.data_points:
-        return None
-    
-    df = pd.DataFrame(st.session_state.data_points)
-    
-    fig = go.Figure()
-    
-    # Add scatter points with color based on RSSI
-    fig.add_trace(go.Scatter(
-        x=df['x'],
-        y=df['y'],
-        mode='markers+lines',
-        marker=dict(
-            size=15,
-            color=df['rssi'],
-            colorscale=[[0, 'red'], [0.25, 'orange'], [0.5, 'yellow'], 
-                       [0.75, 'lightgreen'], [1, 'green']],
-            cmin=-100,
-            cmax=-40,
-            colorbar=dict(
-                title="RSSI (dBm)",
-                titleside="right"
-            ),
-            line=dict(width=2, color='white')
-        ),
-        text=[f'RSSI: {rssi} dBm<br>Position: ({x}, {y})<br>Quality: {quality}' 
-              for x, y, rssi, quality in zip(df['x'], df['y'], df['rssi'], df['quality'])],
-        hovertemplate='%{text}<extra></extra>',
-        name='Measurements',
-        line=dict(color='blue', width=2, dash='dash')
-    ))
-    
-    # Add start position
-    fig.add_trace(go.Scatter(
-        x=[0], y=[0],
-        mode='markers',
-        marker=dict(size=20, color='blue', symbol='star'),
-        name='Start Position',
-        hovertemplate='Start Position (0,0)<extra></extra>'
-    ))
-    
-    fig.update_layout(
-        title='WiFi Signal Strength Heatmap',
-        xaxis_title='X Position (meters)',
-        yaxis_title='Y Position (meters)',
-        hovermode='closest',
-        showlegend=True,
-        height=500,
-        template='plotly_white'
-    )
-    
-    return fig
+        return '#F44336'  # Red
 
 def calculate_stats():
     """Calculate statistics from data points"""
     if not st.session_state.data_points:
         return {}
     
-    df = pd.DataFrame(st.session_state.data_points)
-    rssi_values = df['rssi'].values
+    rssi_values = [p['rssi'] for p in st.session_state.data_points]
     
     stats = {
-        'total_points': len(df),
-        'avg_rssi': np.mean(rssi_values),
-        'min_rssi': np.min(rssi_values),
-        'max_rssi': np.max(rssi_values),
-        'excellent': len(df[df['rssi'] >= -60]),
-        'good': len(df[(df['rssi'] >= -70) & (df['rssi'] < -60)]),
-        'fair': len(df[(df['rssi'] >= -80) & (df['rssi'] < -70)]),
-        'poor': len(df[(df['rssi'] >= -90) & (df['rssi'] < -80)]),
-        'critical': len(df[df['rssi'] < -90]),
-        'agv_suitable': len(df[df['rssi'] >= -70]),
-        'coverage_percent': (len(df[df['rssi'] >= -70]) / len(df)) * 100 if len(df) > 0 else 0
+        'total_points': len(st.session_state.data_points),
+        'avg_rssi': sum(rssi_values) / len(rssi_values),
+        'min_rssi': min(rssi_values),
+        'max_rssi': max(rssi_values),
+        'excellent': len([p for p in st.session_state.data_points if p['rssi'] >= -60]),
+        'good': len([p for p in st.session_state.data_points if -70 <= p['rssi'] < -60]),
+        'fair': len([p for p in st.session_state.data_points if -80 <= p['rssi'] < -70]),
+        'poor': len([p for p in st.session_state.data_points if -90 <= p['rssi'] < -80]),
+        'critical': len([p for p in st.session_state.data_points if p['rssi'] < -90]),
+        'agv_suitable': len([p for p in st.session_state.data_points if p['rssi'] >= -70]),
     }
+    
+    stats['coverage_percent'] = (stats['agv_suitable'] / stats['total_points']) * 100 if stats['total_points'] > 0 else 0
     
     return stats
 
+def create_simple_heatmap():
+    """Create a simple text-based heatmap representation"""
+    if not st.session_state.data_points:
+        return "No data points to display"
+    
+    # Find bounds
+    x_values = [p['x'] for p in st.session_state.data_points]
+    y_values = [p['y'] for p in st.session_state.data_points]
+    
+    min_x, max_x = min(x_values), max(x_values)
+    min_y, max_y = min(y_values), max(y_values)
+    
+    # Create a simple grid representation
+    grid_size = 20
+    grid = {}
+    
+    for point in st.session_state.data_points:
+        # Normalize to grid coordinates
+        if max_x > min_x:
+            grid_x = int((point['x'] - min_x) / (max_x - min_x) * grid_size)
+        else:
+            grid_x = grid_size // 2
+            
+        if max_y > min_y:
+            grid_y = int((point['y'] - min_y) / (max_y - min_y) * grid_size)
+        else:
+            grid_y = grid_size // 2
+            
+        grid[(grid_x, grid_y)] = point
+    
+    return grid, min_x, max_x, min_y, max_y
+
 # Header
 st.title("📶 Simple RSSI Heatmap Tracker")
-st.markdown("**Walk around your warehouse and automatically generate WiFi heatmap for AGV/AMR implementation**")
+st.markdown("**Walk around your warehouse and create WiFi heatmap for AGV/AMR implementation**")
 
 # Create columns for layout
 col1, col2 = st.columns([1, 2])
@@ -172,6 +144,7 @@ with col1:
                 (-5, 8, -58), (8, 10, -72), (12, -5, -78), (-8, -3, -65),
                 (20, 8, -82), (-12, 12, -70), (18, -8, -85), (-15, -10, -88)
             ]
+            st.session_state.data_points = []  # Clear existing
             for x, y, rssi in demo_points:
                 add_data_point(x, y, rssi)
             st.success("Demo data added!")
@@ -182,51 +155,44 @@ with col1:
             st.session_state.data_points = []
             st.success("All data cleared!")
             st.rerun()
-    
-    # File upload
-    st.subheader("📤 Import/Export")
-    uploaded_file = st.file_uploader("Upload CSV data", type=['csv'])
-    
-    if uploaded_file is not None:
-        try:
-            df = pd.read_csv(uploaded_file)
-            if all(col in df.columns for col in ['x', 'y', 'rssi']):
-                st.session_state.data_points = []
-                for _, row in df.iterrows():
-                    add_data_point(row['x'], row['y'], row['rssi'])
-                st.success(f"Imported {len(df)} data points!")
-                st.rerun()
-            else:
-                st.error("CSV must have columns: x, y, rssi")
-        except Exception as e:
-            st.error(f"Error importing file: {e}")
 
 with col2:
     st.header("🗺️ Heatmap Visualization")
     
-    # Display heatmap
     if st.session_state.data_points:
-        fig = create_heatmap()
-        if fig:
-            st.plotly_chart(fig, use_container_width=True)
+        # Display points in a table format since we're avoiding plotly
+        st.subheader("📊 Measurement Points")
+        
+        # Create a visual representation
+        for i, point in enumerate(st.session_state.data_points):
+            color = get_rssi_color(point['rssi'])
+            
+            # Create colored box using HTML
+            st.markdown(f"""
+            <div style="
+                background-color: {color}; 
+                padding: 10px; 
+                margin: 5px 0; 
+                border-radius: 8px; 
+                color: white;
+                font-weight: bold;
+                display: flex;
+                justify-content: space-between;
+            ">
+                <span>Point {i+1}: ({point['x']}m, {point['y']}m)</span>
+                <span>{point['rssi']} dBm - {point['quality']}</span>
+            </div>
+            """, unsafe_allow_html=True)
+            
     else:
-        st.info("👆 Add measurement points to see the heatmap")
-        # Show placeholder
-        placeholder_fig = go.Figure()
-        placeholder_fig.add_trace(go.Scatter(
-            x=[0], y=[0],
-            mode='markers',
-            marker=dict(size=20, color='blue', symbol='star'),
-            name='Start Here'
-        ))
-        placeholder_fig.update_layout(
-            title='Your Heatmap Will Appear Here',
-            xaxis_title='X Position (meters)',
-            yaxis_title='Y Position (meters)',
-            height=400,
-            template='plotly_white'
-        )
-        st.plotly_chart(placeholder_fig, use_container_width=True)
+        st.info("👆 Add measurement points to see the visualization")
+        st.markdown("""
+        ### 📱 How to Use:
+        1. **Add measurements** using the form on the left
+        2. **Try "Demo Data"** to see how it works
+        3. **Walk your warehouse** and record RSSI values
+        4. **Download results** when done
+        """)
 
 # Statistics Dashboard
 if st.session_state.data_points:
@@ -253,28 +219,27 @@ if st.session_state.data_points:
     
     with col1:
         st.subheader("📈 Signal Quality Breakdown")
-        quality_data = {
-            'Quality': ['Excellent', 'Good', 'Fair', 'Poor', 'Critical'],
-            'Count': [stats['excellent'], stats['good'], stats['fair'], stats['poor'], stats['critical']],
-            'RSSI Range': ['≥ -60 dBm', '-70 to -60 dBm', '-80 to -70 dBm', '-90 to -80 dBm', '< -90 dBm']
-        }
-        quality_df = pd.DataFrame(quality_data)
         
-        fig_bar = px.bar(
-            quality_df, 
-            x='Quality', 
-            y='Count',
-            color='Quality',
-            color_discrete_map={
-                'Excellent': 'green',
-                'Good': 'lightgreen', 
-                'Fair': 'yellow',
-                'Poor': 'orange',
-                'Critical': 'red'
-            },
-            title="Data Points by Signal Quality"
-        )
-        st.plotly_chart(fig_bar, use_container_width=True)
+        # Simple bar chart using progress bars
+        st.write("**Excellent (≥-60 dBm):**")
+        st.progress(stats['excellent'] / stats['total_points'] if stats['total_points'] > 0 else 0)
+        st.write(f"{stats['excellent']} points")
+        
+        st.write("**Good (-70 to -60 dBm):**")
+        st.progress(stats['good'] / stats['total_points'] if stats['total_points'] > 0 else 0)
+        st.write(f"{stats['good']} points")
+        
+        st.write("**Fair (-80 to -70 dBm):**")
+        st.progress(stats['fair'] / stats['total_points'] if stats['total_points'] > 0 else 0)
+        st.write(f"{stats['fair']} points")
+        
+        st.write("**Poor (-90 to -80 dBm):**")
+        st.progress(stats['poor'] / stats['total_points'] if stats['total_points'] > 0 else 0)
+        st.write(f"{stats['poor']} points")
+        
+        st.write("**Critical (<-90 dBm):**")
+        st.progress(stats['critical'] / stats['total_points'] if stats['total_points'] > 0 else 0)
+        st.write(f"{stats['critical']} points")
     
     with col2:
         st.subheader("🏭 AGV/AMR Readiness Assessment")
@@ -304,20 +269,21 @@ if st.session_state.data_points:
     col1, col2 = st.columns(2)
     
     with col1:
-        if st.button("📄 Download CSV Data"):
-            df = pd.DataFrame(st.session_state.data_points)
-            csv = df.to_csv(index=False)
-            st.download_button(
-                label="Download CSV",
-                data=csv,
-                file_name=f"rssi_data_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                mime="text/csv"
-            )
+        # Create CSV data
+        csv_data = "x,y,rssi,quality,timestamp\n"
+        for point in st.session_state.data_points:
+            csv_data += f"{point['x']},{point['y']},{point['rssi']},{point['quality']},{point['timestamp']}\n"
+        
+        st.download_button(
+            label="📄 Download CSV Data",
+            data=csv_data,
+            file_name=f"rssi_data_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            mime="text/csv"
+        )
     
     with col2:
-        if st.button("📊 Download Report"):
-            report = f"""
-RSSI HEATMAP SURVEY REPORT
+        # Create report
+        report = f"""RSSI HEATMAP SURVEY REPORT
 =========================
 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 Total Data Points: {stats['total_points']}
@@ -336,47 +302,45 @@ QUALITY BREAKDOWN:
 - Critical (<-90 dBm): {stats['critical']} points
 
 AGV/AMR READINESS: {"READY" if stats['coverage_percent'] >= 95 else "NEEDS WORK" if stats['coverage_percent'] >= 80 else "NOT READY"}
+
+DETAILED MEASUREMENTS:
 """
-            st.download_button(
-                label="Download Report",
-                data=report,
-                file_name=f"rssi_report_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
-                mime="text/plain"
-            )
+        for i, point in enumerate(st.session_state.data_points):
+            report += f"Point {i+1}: ({point['x']}m, {point['y']}m) = {point['rssi']} dBm ({point['quality']})\n"
+        
+        st.download_button(
+            label="📊 Download Report",
+            data=report,
+            file_name=f"rssi_report_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+            mime="text/plain"
+        )
 
 # Instructions
 with st.expander("📖 How to Use This Tool"):
     st.markdown("""
     ### 🚀 Quick Start Guide
     
-    1. **Add Measurements**: Use the form on the left to add RSSI measurements at different positions
-    2. **Try Demo Data**: Click "Demo Data" to see how the heatmap works
-    3. **View Results**: Watch the heatmap update automatically as you add points
-    4. **Analyze Coverage**: Check the statistics to see if your warehouse is AGV-ready
-    5. **Export Data**: Download CSV data or a detailed report
+    1. **Add Measurements**: Use the form to add RSSI measurements at different positions
+    2. **Try Demo Data**: Click "Demo Data" to see how the tool works
+    3. **View Results**: Check the statistics to see if your warehouse is AGV-ready
+    4. **Export Data**: Download CSV data or a detailed report
     
     ### 📱 For Real Warehouse Survey:
     
-    1. **Download a WiFi analyzer app** on your phone:
+    1. **Download WiFi analyzer app** on your phone:
        - Android: "WiFi Analyzer" by VREM (free)
-       - iPhone: "WiFi Explorer Lite" (limited free version)
+       - iPhone: "WiFi Explorer Lite" (free but limited)
     
-    2. **Walk through your warehouse** systematically
-    3. **Record RSSI values** at key positions (every 5-10 meters)
-    4. **Enter the data** into this tool as you go, or collect and upload later
+    2. **Walk through warehouse** systematically (every 5-10 meters)
+    3. **Record position and RSSI** values in this tool
+    4. **Generate professional report** for your AGV implementation team
     
-    ### 🎯 AGV/AMR Requirements:
-    - **Minimum -70 dBm** for reliable operation
-    - **95% coverage** across operational areas  
-    - **No dead zones** on critical paths
-    - **Good handoff** between access points
-    
-    ### 📊 Signal Quality Guide:
-    - **Green (Excellent)**: -60 dBm or better
-    - **Light Green (Good)**: -70 to -60 dBm
-    - **Yellow (Fair)**: -80 to -70 dBm  
-    - **Orange (Poor)**: -90 to -80 dBm
-    - **Red (Critical)**: Below -90 dBm
+    ### 🎯 Signal Quality Guide:
+    - 🟢 **Excellent (≥-60 dBm)**: Perfect for AGVs
+    - 🟢 **Good (-70 to -60 dBm)**: Suitable for AGVs  
+    - 🟡 **Fair (-80 to -70 dBm)**: May need improvement
+    - 🟠 **Poor (-90 to -80 dBm)**: Unsuitable for AGVs
+    - 🔴 **Critical (<-90 dBm)**: No reliable connectivity
     """)
 
 # Footer
